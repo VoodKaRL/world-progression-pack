@@ -1,0 +1,52 @@
+{
+  "name": "world-progression-launcher",
+  "version": "0.7.0",
+  "license": "MIT",
+  "description": "Launcher de Verdania para Minecraft 1.21.1 Fabric",
+  "main": "src/main.cjs",
+  "author": "World Progression",
+  "scripts": {
+    "start": "electron .",
+    "manifest": "node create-client-manifest.mjs",
+    "manifest:legacy": "node create-manifest.mjs",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win dir"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "dev.worldprogression.launcher",
+    "productName": "World Progression Launcher",
+    "directories": {
+      "output": "release"
+    },
+    "asar": true,
+    "files": [
+      "src/**/*"
+    ],
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "nodeGypRebuild": false,
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "Verdania-Launcher-${version}-Setup.${ext}",
+      "icon": "src/assets/verdania.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "allowScripts": {
+    "electron@37.10.3": true,
+    "electron-winstaller@5.4.0": true
+  }
+}
