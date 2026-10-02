@@ -1,0 +1,53 @@
+name: Build Verdania Launcher
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'launcher/src/**'
+      - 'launcher/test/**'
+      - 'launcher/package*.json'
+      - '.github/workflows/build-launcher.yml'
+  pull_request:
+    paths:
+      - 'launcher/src/**'
+      - 'launcher/test/**'
+      - 'launcher/package*.json'
+      - '.github/workflows/build-launcher.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: launcher
+        shell: pwsh
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: launcher/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Test launcher
+        run: node --test test/profile-installer.test.cjs test/profiles.test.cjs test/launch-gate.test.cjs
+      - name: Build Windows installer
+        run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Upload unsigned build for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: verdania-launcher-windows-unsigned
+          path: |
+            launcher/release/Verdania-Launcher-*-Setup.exe
+            launcher/release/Verdania-Launcher-*-Setup.exe.blockmap
+          if-no-files-found: error
