@@ -1,0 +1,11 @@
+{
+  "displayName": "Verdania",
+  "minecraftVersion": "1.21.1",
+  "loader": "fabric",
+  "loaderVersion": "0.19.5",
+  "fabricInstaller": {
+    "url": "https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.1.2/fabric-installer-1.1.2.jar",
+    "sha256": "61e035bf7bf70153e127440ce34de47c9036f0a2d0c65d1529454bd35ceefe4f"
+  },
+  "manifestUrl": "https://github.com/VoodKaRL/world-progression-pack/releases/latest/download/manifest.json"
+}
