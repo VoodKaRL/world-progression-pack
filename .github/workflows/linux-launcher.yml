@@ -32,6 +32,18 @@ jobs:
         run: |
           mkdir -p flatpak-input/verdania/resources
           python3 launcher/linux/build-flatpak.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import struct
+          icon=Path('launcher/src/assets/verdania.ico').read_bytes()
+          for i in range(struct.unpack_from('<H',icon,4)[0]):
+              w,h,_,_,_,_,size,offset=struct.unpack_from('<BBBBHHII',icon,6+16*i)
+              if (w or 256)==256 and icon[offset:offset+8]==b'\x89PNG\r\n\x1a\n':
+                  Path('flatpak-input/icon.png').write_bytes(icon[offset:offset+size]);break
+          else: raise RuntimeError('Missing packaged PNG icon')
+          manifest=Path('flatpak-input/dev.worldprogression.Verdania.json')
+          manifest.write_text(manifest.read_text().replace('512x512','256x256'))
+          PY
       - name: Build shared runtime edition
         run: |
           flatpak-builder --user --assumeyes --install-deps-from=flathub --disable-rofiles-fuse --repo=repo --force-clean build flatpak-input/dev.worldprogression.Verdania.json
