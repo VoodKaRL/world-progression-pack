@@ -29,7 +29,9 @@ jobs:
           sudo apt-get install -y flatpak flatpak-builder xvfb x11-utils imagemagick dbus-x11
           flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
       - name: Stage verified Linux Electron and Prism
-        run: python3 launcher/linux/build-flatpak.py
+        run: |
+          mkdir -p flatpak-input/verdania/resources
+          python3 launcher/linux/build-flatpak.py
       - name: Build shared runtime edition
         run: |
           flatpak-builder --user --assumeyes --install-deps-from=flathub --disable-rofiles-fuse --repo=repo --force-clean build flatpak-input/dev.worldprogression.Verdania.json
