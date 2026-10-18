@@ -1,0 +1,72 @@
+name: Linux launcher - Flatpak and native smoke test
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/linux-launcher.yml']
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download exact reviewed launcher source
+        run: |
+          curl -fL --retry 3 'https://github.com/VoodKaRL/world-progression-pack/releases/download/v0.34.18/Verdania-Launcher-0.9.3-Fuentes.zip' -o source.zip
+          echo 'c987ae48d7e5f0297b883db62faa76426e0d158eac601c6e83e69ec23343f74a  source.zip' | sha256sum -c -
+          unzip -q source.zip
+      - name: Test Linux routing, install plans and existing launcher behavior
+        run: |
+          npm ci --prefix launcher
+          node --test launcher/test/profile-installer.test.cjs launcher/test/profiles.test.cjs launcher/test/launch-gate.test.cjs launcher/test/prism-startup.test.cjs launcher/test/linux.test.cjs launcher/test/linux-dependencies.test.cjs | tee linux-tests.txt
+          node work/build-linux-asar-093.cjs
+      - name: Install build and desktop test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y flatpak flatpak-builder xvfb x11-utils imagemagick dbus-x11
+          flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+      - name: Stage verified Linux Electron and Prism
+        run: python3 launcher/linux/build-flatpak.py
+      - name: Build shared runtime edition
+        run: |
+          flatpak-builder --user --assumeyes --install-deps-from=flathub --disable-rofiles-fuse --repo=repo --force-clean build flatpak-input/dev.worldprogression.Verdania.json
+          flatpak build-bundle repo Verdania-Launcher-0.9.3-Linux-x86_64.flatpak dev.worldprogression.Verdania --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+          flatpak --user install --noninteractive --assumeyes ./Verdania-Launcher-0.9.3-Linux-x86_64.flatpak
+      - name: Native Linux window and bundled engine smoke test
+        run: |
+          cat > smoke.sh <<'SH'
+          #!/bin/sh
+          set -eu
+          flatpak run dev.worldprogression.Verdania --enable-logging=stderr >linux-launch.log 2>&1 &
+          launcher_pid=$!
+          trap 'kill "$launcher_pid" 2>/dev/null || true' 0
+          found=false
+          for n in $(seq 1 60); do
+            if xwininfo -root -tree | grep 'Verdania Launcher' > window-proof.txt; then found=true; break; fi
+            if ! kill -0 "$launcher_pid" 2>/dev/null; then cat linux-launch.log; exit 1; fi
+            sleep 1
+          done
+          if [ "$found" != true ]; then cat linux-launch.log; exit 1; fi
+          import -window root linux-smoke.png
+          flatpak run --command=sh dev.worldprogression.Verdania -c 'test -x /app/lib/prism/AppRun; /app/lib/prism/AppRun --version' >prism-version.txt 2>&1
+          printf '{"native_linux_window":true,"bundled_prism_version_check":true,"minecraft_auth_test":false}\n' > linux-smoke-proof.json
+          SH
+          dbus-run-session -- xvfb-run -a sh smoke.sh
+          sha256sum Verdania-Launcher-0.9.3-Linux-x86_64.flatpak > SHA256-linux-flatpak.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Verdania-Linux-0.9.3
+          path: |
+            Verdania-Launcher-0.9.3-Linux-x86_64.flatpak
+            SHA256-linux-flatpak.txt
+            linux-tests.txt
+            linux-launch.log
+            linux-smoke.png
+            linux-smoke-proof.json
+            window-proof.txt
+            prism-version.txt
+          if-no-files-found: warn
