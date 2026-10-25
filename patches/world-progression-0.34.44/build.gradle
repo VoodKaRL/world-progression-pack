@@ -1,0 +1,577 @@
+plugins {
+    id 'fabric-loom' version '1.8.13'
+    id 'maven-publish'
+}
+
+version = '0.34.44'
+group = 'dev.worldprogression'
+base { archivesName = 'world-progression' }
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://www.cursemaven.com' }
+    maven { url = 'https://api.modrinth.com/maven' }
+}
+
+// Loom development runs do not discover libraries nested inside dependency JARs.
+// Extract the exact bundled versions; production Fabric loads these from the providers.
+configurations { providerBundles }
+dependencies {
+    modRuntimeOnly files("../verdania-harvest/build/libs/verdania-harvest-0.1.0-preview.11.jar")
+    providerBundles 'maven.modrinth:mythicmetals:fKQ4feyG'
+    providerBundles 'maven.modrinth:owo-lib:JB1fLQnc'
+    if (project.hasProperty('wind34Visual')) providerBundles files('../../mods/yet_another_config_lib_v3-3.6.6+1.21.1-fabric.jar')
+}
+def bundledMods = []
+def bundledLibraries = []
+configurations.providerBundles.files.each { provider ->
+    def archive = new java.util.zip.ZipFile(provider)
+    try {
+        def metadata = new groovy.json.JsonSlurper().parse(archive.getInputStream(archive.getEntry('fabric.mod.json')))
+        metadata.jars.each { nested ->
+            if (new File(nested.file).name.startsWith('owo-sentinel-')) return
+            def destination = layout.buildDirectory.file('provider-libraries/' + new File(nested.file).name).get().asFile
+            destination.parentFile.mkdirs()
+            destination.bytes = archive.getInputStream(archive.getEntry(nested.file)).bytes
+            def nestedArchive = new java.util.zip.ZipFile(destination)
+            try {
+                (nestedArchive.getEntry('fabric.mod.json') != null ? bundledMods : bundledLibraries).add(destination)
+            } finally { nestedArchive.close() }
+        }
+    } finally { archive.close() }
+}
+
+dependencies {
+    modRuntimeOnly files(bundledMods)
+    runtimeOnly files(bundledLibraries)
+    minecraft 'com.mojang:minecraft:1.21.1'
+    mappings 'net.fabricmc:yarn:1.21.1+build.3:v2'
+    modImplementation (project.hasProperty('rarityVisual') ? 'net.fabricmc:fabric-loader:0.19.2' : 'net.fabricmc:fabric-loader:0.18.4')
+    modImplementation (project.hasProperty('markerFullAudit') ? 'net.fabricmc.fabric-api:fabric-api:0.116.6+1.21.1' : 'net.fabricmc.fabric-api:fabric-api:0.115.6+1.21.1')
+    if(project.hasProperty('markerFullAudit')) modRuntimeOnly files('../../work/marker26/eternal-starlight-dev.jar')
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    modRuntimeOnly 'maven.modrinth:mythicmetals:fKQ4feyG'
+    modRuntimeOnly 'maven.modrinth:alloy-forgery:czJc7eUX'
+    modRuntimeOnly 'maven.modrinth:owo-lib:JB1fLQnc'
+    modRuntimeOnly 'curse.maven:goblin-traders-363703:6267755'
+    runtimeOnly 'org.reflections:reflections:0.10.2'
+    runtimeOnly 'org.javassist:javassist:3.29.2-GA'
+    runtimeOnly (project.hasProperty('rarityVisual') ? 'com.electronwill.night-config:core:3.8.0' : 'com.electronwill.night-config:core:3.7.1')
+    runtimeOnly (project.hasProperty('rarityVisual') ? 'com.electronwill.night-config:toml:3.8.0' : 'com.electronwill.night-config:toml:3.7.1')
+    modRuntimeOnly 'curse.maven:framework-549225:5911983' 
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    withSourcesJar()
+}
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+    options.encoding = 'UTF-8'
+}
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') { expand version: project.version }
+}
+test { useJUnitPlatform() }
+
+sourceSets {
+    repro {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+    uitest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+    gametest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+}
+
+tasks.register('reproJar', Jar) {
+    dependsOn tasks.named('reproClasses')
+    from sourceSets.repro.output
+    archiveClassifier = 'repro-dev'
+}
+tasks.register('remapReproJar', net.fabricmc.loom.task.RemapJarTask) {
+    dependsOn tasks.named('reproJar')
+    inputFile = tasks.named('reproJar').flatMap { it.archiveFile }
+    archiveClassifier = 'repro'
+}
+def testWorldDir = project.findProperty('testWorldDir') ?: (project.hasProperty('alienTests') ? '../../work/gametest-aliens-v1' : project.hasProperty('mobBehaviorTests') ? '../../work/gametest-mob-behavior-v320' : project.hasProperty('meteorTests') ? '../../work/gametest-meteor-v290-final' : project.hasProperty('reinforcementTests') ? '../../work/gametest-reinforcements-v210' : project.hasProperty('mobSettingsTests') ? '../../work/gametest-mob-settings-v210' : project.hasProperty('adminLootTests') ? '../../work/gametest-loot-v190' : project.hasProperty('adminRecipeTests') ? '../../work/gametest-recipes-v180' : '../../work/gametest-v130-tested')
+tasks.named('processGametestResources') {
+    inputs.property 'alienTests', project.hasProperty('alienTests')
+    if (project.hasProperty('alienTests')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests', 'dev.worldprogression.test.AlienGameTests') } }
+    }
+    inputs.property 'mobBehaviorTests', project.hasProperty('mobBehaviorTests')
+    if (project.hasProperty('mobBehaviorTests')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests', 'dev.worldprogression.test.MobBehaviorGameTests') } }
+    }
+    inputs.property 'ecologyTests', project.hasProperty('ecologyTests')
+    if(project.hasProperty('ecologyTests')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests', 'dev.worldprogression.test.EcologyGameTests') } }
+    }
+    inputs.property 'journalCombatTests',project.hasProperty('journalCombatTests')
+    if(project.hasProperty('journalCombatTests'))filesMatching('fabric.mod.json'){filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.JournalCombatGameTests') }}
+    inputs.property 'meteorTests', project.hasProperty('meteorTests')
+    if (project.hasProperty('meteorTests')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests', 'dev.worldprogression.test.MeteorGameTests') } }
+    }
+    inputs.property 'reinforcementTests', project.hasProperty('reinforcementTests')
+    if (project.hasProperty('reinforcementTests')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests', 'dev.worldprogression.test.ReinforcementDamageGameTests') } }
+    }
+    inputs.property 'mobSettingsTests', project.hasProperty('mobSettingsTests')
+    if (project.hasProperty('mobSettingsTests')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests', 'dev.worldprogression.test.MobSettingsGameTests') } }
+    }
+    inputs.property 'adminLootTests', project.hasProperty('adminLootTests')
+    if (project.hasProperty('adminLootTests')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests', 'dev.worldprogression.test.LootAdminGameTests') } }
+    }
+    inputs.property 'adminRecipeTests', project.hasProperty('adminRecipeTests')
+    if (project.hasProperty('adminRecipeTests')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests', 'dev.worldprogression.test.RecipeAdminGameTests') } }
+    }
+}
+
+tasks.named('processUitestResources') {
+    inputs.property 'alienVisualTests', project.hasProperty('alienVisualTests')
+    if (project.hasProperty('alienVisualTests')) {
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.MeteorUiTestClient', 'dev.worldprogression.test.AlienVisualClient') } }
+    }
+}
+def uniqueProvider = file('../../work/providers/spookis-unique-mobs-0.9.1+1.21.1+fabric.jar')
+def uniqueDev = layout.buildDirectory.file('provider-libraries/unique-mobs-dev-remap.jar').get().asFile
+if (uniqueProvider.exists() && (!uniqueDev.exists() || uniqueProvider.lastModified() > uniqueDev.lastModified())) {
+    uniqueDev.parentFile.mkdirs()
+    def archive = new java.util.jar.JarFile(uniqueProvider)
+    try {
+        def manifest = new java.util.jar.Manifest(archive.manifest)
+        manifest.mainAttributes.remove(new java.util.jar.Attributes.Name('Fabric-Loom-Version'))
+        new java.util.jar.JarOutputStream(new FileOutputStream(uniqueDev), manifest).withCloseable { output ->
+            archive.entries().each { entry ->
+                if (entry.name.equalsIgnoreCase('META-INF/MANIFEST.MF')) return
+                output.putNextEntry(new java.util.jar.JarEntry(entry))
+                archive.getInputStream(entry).withCloseable { input -> input.transferTo(output) }
+                output.closeEntry()
+            }
+        }
+    } finally { archive.close() }
+}
+
+configurations {
+    uitestImplementation.extendsFrom implementation
+    uitestRuntimeOnly.extendsFrom runtimeOnly
+    gametestImplementation.extendsFrom implementation
+    gametestRuntimeOnly.extendsFrom runtimeOnly
+}
+dependencies {
+    // Dev-only copy omits the producer Loom version hint so Loom remaps its
+    // intermediary names. The original provider JAR is never modified or shipped here.
+    modRuntimeOnly files(uniqueDev)
+}
+loom {
+    mixin {
+        useLegacyMixinAp = true
+        defaultRefmapName = 'worldprogression.refmap.json'
+    }
+    mods {
+        worldprogression { sourceSet sourceSets.main }
+        worldprogression_tests { sourceSet sourceSets.gametest }
+        if (project.hasProperty("uiSmokeTests")) { worldprogression_ui_tests { sourceSet sourceSets.uitest } }
+    }
+    runs {
+        if (project.hasProperty('uiSmokeTests')) {
+            client {
+                source sourceSets.uitest
+                runDir (project.hasProperty('meteorVisualTests') ? '../../work/gui-meteor-buried-v4' : '../../work/gui-v290-check')
+                programArg '--username'; programArg 'MenuTest'
+                if(project.hasProperty('journalUiTests')){vmArg '-Dverdania.journalUiTests=true';programArg '--quickPlaySingleplayer';programArg 'New World'}
+                if(project.hasProperty('missionsUiTests')){vmArg '-Dverdania.missionsUiTests=true';programArg '--quickPlaySingleplayer';programArg 'New World'}
+                if(project.hasProperty('meteorAtmosphereTests'))vmArg '-Dverdania.meteorAtmosphereTests=true'
+                if(project.hasProperty('meteorAtmosphereVideo')){vmArg '-Dverdania.meteorAtmosphereVideo=true';vmArg '-Dverdania.ffmpeg=' + file('../../work/video-tools/imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe').absolutePath;}
+                if(project.hasProperty('meteorVideoTests')){vmArg '-Dverdania.meteorVideoTests=true';vmArg '-Dverdania.ffmpeg=' + file('../../work/video-tools/imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe').absolutePath;}
+                if(project.hasProperty('meteorVisualTests')){vmArg '-Dverdania.meteorVisualTests=true';programArg '--quickPlaySingleplayer';programArg 'Meteor-Video'}
+                
+                programArg '--width'; programArg (project.hasProperty('capturePanorama') ? '1024' : '1280')
+                programArg '--height'; programArg (project.hasProperty('capturePanorama') ? '1024' : '720')
+                if (project.hasProperty('recipesUiTests')) {
+                    vmArg '-Dverdania.recipesUiTests=true'
+                    programArg '--quickPlaySingleplayer'; programArg 'New World'
+                }
+                if (project.hasProperty('mobUiTests')) {
+                    vmArg '-Dverdania.mobUiTests=true'
+                    programArg '--quickPlaySingleplayer'; programArg 'New World'
+                }
+                if (project.hasProperty('capturePanorama')) {
+                    vmArg '-Dverdania.capturePanorama=true'
+                    programArg '--quickPlaySingleplayer'; programArg 'New World'
+                }
+                if (project.hasProperty('alienVisualTests')) {
+                    vmArg '-Dverdania.exportAlienUvs=true'
+                    programArg '--quickPlaySingleplayer'; programArg 'New World'
+                }
+                if(project.hasProperty('parasiteNetworkTests'))vmArg '-Dverdania.parasiteNetworkTests=true'
+                if(project.hasProperty('walkTests'))vmArg '-Dverdania.walkTests=true'
+            }
+        }
+        gameTest {
+            server()
+            name 'World Progression Game Tests'
+            source sourceSets.gametest
+            runDir testWorldDir
+            vmArg '-Dfabric-api.gametest'
+            vmArg "-Dfabric-api.gametest.report-file=${layout.buildDirectory.file('gametest-results.xml').get().asFile.absolutePath}"
+        }
+    }
+}
+tasks.named('runGameTest') {
+    // oÏ‰o prompts even in GameTest's development launch. Decline the prompt;
+    // the test harness does not require or change a production EULA agreement.
+    standardInput = new ByteArrayInputStream('false\n'.getBytes('UTF-8'))
+    doFirst {
+        def directory = file(testWorldDir + '/config')
+        directory.mkdirs()
+        def propertiesFile = file(testWorldDir + '/server.properties')
+        def serverProperties = new Properties()
+        if (propertiesFile.exists()) propertiesFile.withInputStream { serverProperties.load(it) }
+        serverProperties.setProperty('server-ip', '127.0.0.1')
+        serverProperties.setProperty('server-port', '25599')
+        propertiesFile.withOutputStream { serverProperties.store(it, 'Local automated game tests') }
+        def destination = new File(directory, 'worldprogression.json')
+        if (!destination.exists()) {
+            def config = new groovy.json.JsonSlurper().parse(file('src/main/resources/worldprogression/default-config.json'))
+            destination.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(config))
+        }
+    }
+}
+
+if (project.hasProperty('uiSmokeTests') && !project.hasProperty('cosmicVisual')) { dependencies { modRuntimeOnly fileTree('../../work/fancymenu') { include '*.jar' } } }
+
+
+
+
+
+tasks.named('processGametestResources') {
+ inputs.property 'preparationTests',project.hasProperty('preparationTests')
+ if(project.hasProperty('preparationTests'))filesMatching('fabric.mod.json'){filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.PreparationGameTests') }}
+}
+
+tasks.named('processGametestResources') {
+ inputs.property 'meteorSearchTests', project.hasProperty('meteorSearchTests')
+ if(project.hasProperty('meteorSearchTests')) filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.MeteorSearchGameTests') } }
+}
+
+
+tasks.named('processGametestResources') {
+ inputs.property 'vanillaEggTests', project.hasProperty('vanillaEggTests')
+ if(project.hasProperty('vanillaEggTests')) filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.VanillaEggGameTests') } }
+}
+
+
+tasks.named('processGametestResources') { inputs.property 'introTests', project.hasProperty('introTests'); if(project.hasProperty('introTests'))filesMatching('fabric.mod.json'){filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.StageTwoIntroGameTests') }} }
+
+if(project.hasProperty('introVisual')) { dependencies { modRuntimeOnly files('../verdania-lives/build/libs/verdania-lives-0.1.0-preview.1.jar') }; loom.runs.client {runDir '../../work/intro-client-0347';vmArg '-Dverdania.introVisual=true';programArg '--quickPlaySingleplayer';programArg 'New World';} }
+tasks.named('processGametestResources') { inputs.property 'cosmicTests',project.hasProperty('cosmicTests'); if(project.hasProperty('cosmicTests'))filesMatching('fabric.mod.json'){filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.CosmicGameTests') }} }
+if(project.hasProperty('cosmicVisual')) { tasks.named('processUitestResources'){inputs.property 'cosmicVisual',true;filesMatching('fabric.mod.json'){filter { line -> line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.CosmicVisualClient') }}};loom.runs.client{runDir '../../work/cosmic-client-v1';programArg '--quickPlaySingleplayer';programArg 'New World';} }
+
+if(project.hasProperty('cosmicDungeon'))loom.runs.client{vmArg '-Dverdania.cosmicDungeon=true'}
+
+if(project.hasProperty("cosmicCombat"))loom.runs.client{vmArg "-Dverdania.cosmicCombat=true"}
+
+tasks.named("processGametestResources") { inputs.property "cosmicCombatTests",project.hasProperty("cosmicCombatTests"); if(project.hasProperty("cosmicCombatTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.CosmicCombatGameTests") }} }
+
+tasks.named("processGametestResources") { inputs.property "mineralTests",project.hasProperty("mineralTests"); if(project.hasProperty("mineralTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.MineralGameTests") }} }
+
+if(project.hasProperty("mineralVisual"))loom.runs.client{vmArg "-Dverdania.mineralVisual=true"}
+
+if(project.hasProperty('cofferHud'))dependencies { modRuntimeOnly files('../verdania-lives/build/libs/verdania-lives-0.1.2.jar') }
+tasks.named("processGametestResources") { inputs.property "meteorFixTests",project.hasProperty("meteorFixTests"); if(project.hasProperty("meteorFixTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.MeteorFixGameTests") }} }
+
+if(project.hasProperty("cosmicShowcase"))loom.runs.client{vmArg "-Dverdania.cosmicShowcase=true"}
+
+
+if(project.hasProperty("fruitVisual"))loom.runs.client{vmArg "-Dverdania.fruitVisual=true"}
+
+if(project.hasProperty("sproutVisual"))loom.runs.client{vmArg "-Dverdania.sproutVisual=true"}
+
+
+if(project.hasProperty("missionVisual"))loom.runs.client{vmArg "-Dverdania.missionVisual=true"}
+
+tasks.named("processGametestResources"){inputs.property "spawnMixTests",project.hasProperty("spawnMixTests");if(project.hasProperty("spawnMixTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.SpawnMixGameTests") }}}
+tasks.named("processGametestResources"){inputs.property "bossRenewalTests",project.hasProperty("bossRenewalTests");if(project.hasProperty("bossRenewalTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.BossRenewalGameTests") }}}
+
+tasks.named("processGametestResources"){inputs.property "remedyCatalogTests",project.hasProperty("remedyCatalogTests");if(project.hasProperty("remedyCatalogTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.RemedyCatalogGameTests") }}}
+
+if(project.hasProperty('sculptVisual'))loom.runs.client{vmArg '-Dverdania.sculptVisual=true'}
+
+tasks.named("processGametestResources"){inputs.property "meteorDropTests",project.hasProperty("meteorDropTests");if(project.hasProperty("meteorDropTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.MeteorDropGameTests") }}}
+if(project.hasProperty('cleanChestVisual'))loom.runs.client{vmArg '-Dverdania.cleanChestVisual=true'}
+
+if(project.hasProperty('azgarVisual'))loom.runs.client{vmArg '-Dverdania.azgarVisual=true'}
+
+tasks.named("processGametestResources"){inputs.property "azgarTests",project.hasProperty("azgarTests");if(project.hasProperty("azgarTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.AzgarGameTests") }}}
+
+if(project.hasProperty('userFruitGallery'))loom.runs.client{vmArg '-Dverdania.userFruitGallery=true'}
+
+if(project.hasProperty('golemVisual'))loom.runs.client{vmArg '-Dverdania.golemVisual=true'}
+
+tasks.named("processGametestResources"){inputs.property "golemTests",project.hasProperty("golemTests");if(project.hasProperty("golemTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.GolemGameTests") }}}
+
+tasks.named("processGametestResources"){inputs.property "blackstoneTests",project.hasProperty("blackstoneTests");if(project.hasProperty("blackstoneTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.BlackstoneBossGameTests") }}}
+
+if(project.hasProperty('blackstoneVisual'))loom.runs.client{vmArg '-Dverdania.blackstoneVisual=true'}
+
+
+if(project.hasProperty('slimeVisual'))loom.runs.client{vmArg '-Dverdania.slimeVisual=true'}
+tasks.named("processGametestResources"){inputs.property "slimeTests",project.hasProperty("slimeTests");if(project.hasProperty("slimeTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.ElementSlimeGameTests") }}}
+
+tasks.named("processGametestResources"){inputs.property "slimePackTests",project.hasProperty("slimePackTests");if(project.hasProperty("slimePackTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.SlimePackGameTests") }}}
+
+if(project.hasProperty('mobLootVisual'))loom.runs.client{vmArg '-Dverdania.mobLootVisual=true'}
+tasks.named("processGametestResources"){inputs.property "mobLootTests",project.hasProperty("mobLootTests");if(project.hasProperty("mobLootTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.MobLootGameTests") }}}
+
+tasks.named("processGametestResources"){inputs.property "octopusTests",project.hasProperty("octopusTests");if(project.hasProperty("octopusTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.OctopusGameTests") }}}
+if(project.hasProperty('octopusVisual'))loom.runs.client{vmArg '-Dverdania.octopusVisual=true'}
+
+tasks.named("processGametestResources"){inputs.property "daySlimeTests",project.hasProperty("daySlimeTests");if(project.hasProperty("daySlimeTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.DaySlimeGameTests") }}}
+
+tasks.named("processGametestResources"){inputs.property "itemDescriptionTests",project.hasProperty("itemDescriptionTests");if(project.hasProperty("itemDescriptionTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.ItemDescriptionGameTests") }}}
+if(project.hasProperty('itemDescriptionsVisual'))loom.runs.client{vmArg '-Dverdania.itemDescriptionsVisual=true'}
+
+if(project.hasProperty("rarityVisual"))dependencies { modRuntimeOnly files("../../mods/ItemBorders-1.21-fabric-1.2.5.jar", "../../work/rarity-dev-dependencies/Iceberg-1.21.1-fabric-1.3.2.jar", "../../mods/Prism-1.21.1-fabric-1.0.11.jar", "../../work/rarity-dev-dependencies/obscure_tooltips-fabric-1.21.1-4.2.5.jar", "../../work/rarity-dev-dependencies/fragmentum-5.0.0+1.21.1-fabric.jar") }
+
+if(project.hasProperty('rarityVisual'))dependencies { modRuntimeOnly 'net.fabricmc:fabric-language-kotlin:1.13.9+kotlin.2.3.10' }
+
+if(project.hasProperty("rarityVisual"))dependencies { modRuntimeOnly files("../../work/rarity-dev-dependencies/forgeconfigapiport-fabric-21.1.4.jar", "../../work/rarity-dev-dependencies/yet-another-config-lib-3.6.6+1.21.1-fabric.jar") }
+
+if(project.hasProperty("rarityVisual"))dependencies { modRuntimeOnly fileTree("../../work/rarity-dev-dependencies/libraries") { include "*.jar" } }
+
+tasks.named("processGametestResources"){inputs.property "slimeDungeonTests",project.hasProperty("slimeDungeonTests");if(project.hasProperty("slimeDungeonTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.SlimeDungeonGameTests") }}}
+
+tasks.named("processGametestResources"){inputs.property "octopusEquipmentTests",project.hasProperty("octopusEquipmentTests");if(project.hasProperty("octopusEquipmentTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.OctopusEquipmentGameTests") }}}
+
+if(project.hasProperty("octopusToolsVisual"))loom.runs.client{vmArg "-Dverdania.octopusToolsVisual=true"}
+tasks.named("processGametestResources"){inputs.property "slimeRitualTests",project.hasProperty("slimeRitualTests");if(project.hasProperty("slimeRitualTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.SlimeRitualGameTests") }}}
+if(project.hasProperty("slimeAltarVisual"))loom.runs.client{vmArg "-Dverdania.slimeAltarVisual=true"}
+tasks.named("processGametestResources"){inputs.property "mimicTests",project.hasProperty("mimicTests");if(project.hasProperty("mimicTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.MimicPyramidGameTests") }}}
+if(project.hasProperty("mimicVisual"))loom.runs.client{vmArg "-Dverdania.mimicVisual=true"}
+if(project.hasProperty("mimicAttackVisual"))loom.runs.client{vmArg "-Dverdania.mimicAttackVisual=true"}
+
+if(project.hasProperty("mimicRegressionVisual"))loom.runs.client{vmArg "-Dverdania.mimicRegressionVisual=true"}
+
+if(project.hasProperty("pyramidNaturalVisual"))loom.runs.client{vmArg "-Dverdania.pyramidNaturalVisual=true"}
+
+tasks.named("processGametestResources"){inputs.property "slimeAdaptationTests",project.hasProperty("slimeAdaptationTests");if(project.hasProperty("slimeAdaptationTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.SlimeAdaptationGameTests") }}}
+
+if(project.hasProperty('natureVisual')) {
+ dependencies { modImplementation files('../../mods/modmenu-11.0.5.jar');modImplementation files('../../mods/cloth-config-15.0.140-fabric.jar');runtimeOnly files('../../work/nature-ui-test-libraries/basic-math-0.6.1.jar') }
+ loom.runs.client { vmArg '-Dverdania.natureVisual=true' }
+}
+
+if(project.hasProperty('natureQuick'))loom.runs.client{vmArg '-Dverdania.natureQuick=true'}
+
+ tasks.named("processGametestResources"){inputs.property "cinderTests",project.hasProperty("cinderTests");if(project.hasProperty("cinderTests"))filesMatching("fabric.mod.json"){filter { line -> line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.CinderGameTests") }}}
+if(project.hasProperty('cinderVisual'))loom.runs.client{vmArg '-Dverdania.cinderVisual=true'}
+
+if(project.hasProperty('natureTitleVisual')){dependencies{modRuntimeOnly files('../../mods/fancymenu_fabric_3.9.14_MC_1.21.1.jar','../../mods/konkrete_fabric_1.9.9_MC_1.21.jar','../../mods/melody_fabric_1.0.10_MC_1.21.jar','../../mods/modmenu-11.0.5.jar')};tasks.named('processUitestResources'){inputs.property 'natureTitleVisual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.NatureTitleVisual')}}};loom.runs.client{runDir '../../work/nature-title-client';vmArg '-Dverdania.natureTitleVisual=true'}}
+
+if(project.hasProperty("userSlimeVisual"))loom.runs.client{runDir "../../work/user-slime-client"}
+
+if(project.hasProperty("jadeVillageTests")){tasks.named("processGametestResources"){inputs.property "jadeVillageTests",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.ProgressionGameTests","dev.worldprogression.test.JadeVillageGameTests")}}};loom.runs.gameTest{runDir "../../work/jade-village-gametest"}}
+
+if(project.hasProperty("jadeVillageVisual")){tasks.named("processUitestResources"){inputs.property "jadeVillageVisual",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.MeteorUiTestClient","dev.worldprogression.test.JadeVillageVisual")}}};loom.runs.client{runDir "../../work/jade-village-client-v5";programArg "--quickPlaySingleplayer";programArg "New World"}}
+
+if(project.hasProperty("jadeVillagePortrait")){tasks.named("processUitestResources"){inputs.property "jadeVillagePortrait",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.MeteorUiTestClient","dev.worldprogression.test.JadeVillagePortrait")}}};loom.runs.client{runDir "../../work/jade-village-client-v5";programArg "--quickPlaySingleplayer";programArg "New World"}}
+
+if(project.hasProperty("skeletonAnimationVisual")){tasks.named("processUitestResources"){inputs.property "skeletonAnimationVisual",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.MeteorUiTestClient","dev.worldprogression.test.CinderAnimationVisual")}}};loom.runs.client{runDir "../../work/skeleton-animation-client";programArg "--quickPlaySingleplayer";programArg "New World"}}
+
+if(project.hasProperty("experienceVisual")){dependencies{modRuntimeOnly files('../../mods/modmenu-11.0.5.jar')};tasks.named("processUitestResources"){inputs.property "experienceVisual",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.MeteorUiTestClient","dev.worldprogression.test.ExperienceReviewVisual")}}};loom.runs.client{runDir "../../work/experience-review-client-v4";programArg "--quickPlaySingleplayer";programArg "New World"}}
+if(project.hasProperty("houseDecorationVisual")){tasks.named("processUitestResources"){inputs.property "houseDecorationVisual",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.MeteorUiTestClient","dev.worldprogression.test.HouseDecorationVisual")}}};loom.runs.client{runDir "../../work/experience-review-client-v4";programArg "--quickPlaySingleplayer";programArg "New World"}}
+
+if(project.hasProperty("review018Visual")){tasks.named("processUitestResources"){inputs.property "review018Visual",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.MeteorUiTestClient","dev.worldprogression.test.Review018Visual")}}};loom.runs.client{runDir "../../work/review-03418-client";programArg "--quickPlaySingleplayer";programArg "New World"}}
+
+if(project.hasProperty("review018Refuge")){tasks.named("processUitestResources"){inputs.property "review018Refuge",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.MeteorUiTestClient","dev.worldprogression.test.Review018Refuge")}}};loom.runs.client{runDir "../../work/review-03418-client";programArg "--quickPlaySingleplayer";programArg "New World"}}
+
+
+if(project.hasProperty("revision019Visual")){loom.runs.client{vmArg "-Dverdania.pyramidDiagnostics=true"};tasks.named("processUitestResources"){inputs.property "revision019Visual",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.MeteorUiTestClient","dev.worldprogression.test.Revision019Visual")}}};loom.runs.client{runDir "../../work/skeleton-animation-client";programArg "--quickPlaySingleplayer";programArg "New World"}}
+
+if(project.hasProperty('spiderMeteorTests')){
+ tasks.named('processGametestResources'){inputs.property 'spiderMeteorTests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.SpiderMeteorGameTests')}}}
+}
+if(project.hasProperty('spiderMeteorVisual')){
+ tasks.named('processUitestResources'){inputs.property 'spiderMeteorVisual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.SpiderMeteorVisual')}}}
+ loom.runs.client{runDir '../../work/spider-meteor-client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+}
+
+if(project.hasProperty('revision20Tests')){tasks.named('processGametestResources'){inputs.property 'revision20Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Revision20GameTests')}}}}
+if(project.hasProperty('revision20Visual')){
+ dependencies{modRuntimeOnly files('../../mods/sound-physics-remastered-fabric-1.21.1-1.4.10.jar')}
+ tasks.named('processUitestResources'){inputs.property 'revision20Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.Revision20Visual')}}}
+ loom.runs.client{runDir '../../work/revision20-client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+}
+
+if(project.hasProperty('revision21Tests')){tasks.named('processGametestResources'){inputs.property 'revision21Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Revision21GameTests')}}}}
+if(project.hasProperty('revision21Visual')){
+ tasks.named('processUitestResources'){inputs.property 'revision21Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.Revision21Visual')}}}
+ loom.runs.client{runDir '../../work/revision21-client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+}
+
+if(project.hasProperty('meteorLookVisual')){
+ tasks.named('processUitestResources'){inputs.property 'meteorLookVisual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.MeteorLookVisual')}}}
+ loom.runs.client{runDir '../../work/revision21-client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+}
+
+if(project.hasProperty('bagTests')){tasks.named('processGametestResources'){inputs.property 'bagTests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.BagGameTests')}}}}
+if(project.hasProperty('bagVisual')){
+ tasks.named('processUitestResources'){inputs.property 'bagVisual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.BagVisual')}}}
+ loom.runs.client{runDir '../../work/revision21-client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+}
+if(project.hasProperty('bagVisual')){dependencies {
+ modRuntimeOnly 'maven.modrinth:polytone:xa3JRcsM'
+ runtimeOnly 'net.objecthunter:exp4j:0.4.8'
+ modRuntimeOnly 'maven.modrinth:continuity:kSPJ4hQv'
+ modRuntimeOnly 'maven.modrinth:sodium:b70slbHV'
+}}
+if(project.hasProperty('bagCatalogVisual')){tasks.named('processUitestResources'){inputs.property 'bagCatalogVisual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.BagCatalogVisual')}}}}
+if(project.hasProperty('slimeRevision22Tests')){tasks.named('processGametestResources'){inputs.property 'slimeRevision22Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.SlimeRevision22Tests')}}}}
+if(project.hasProperty('slimeAltarVisual22')){tasks.named('processUitestResources'){inputs.property 'slimeAltarVisual22',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.SlimeAltarVisual22')}}}}
+if(project.hasProperty('combatRevision23Tests')){tasks.named('processGametestResources'){inputs.property 'combatRevision23Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.CombatRevision23Tests')}}}}
+if(project.hasProperty('combatVisual23')){tasks.named('processUitestResources'){inputs.property 'combatVisual23',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.CombatVisual23')}}}}
+if(project.hasProperty('slimeArenaTests')){tasks.named('processGametestResources'){inputs.property 'slimeArenaTests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.SlimeArenaGameTests')}}}}
+if(project.hasProperty('slimeSummoningVisual')){tasks.named('processUitestResources'){inputs.property 'slimeSummoningVisual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.SlimeSummoningVisual')}}}}
+if(project.hasProperty('survival24Tests')){tasks.named('processGametestResources'){inputs.property 'survival24Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.SurvivalRevision24Tests')}}}}
+if(project.hasProperty('survival24Visual')){tasks.named('processUitestResources'){inputs.property 'survival24Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.SurvivalVisual24')}}}}
+if(project.hasProperty('field25Tests')){tasks.named('processGametestResources'){inputs.property 'field25Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.FieldRevision25Tests')}}}}
+if(project.hasProperty('field25Visual')){tasks.named('processUitestResources'){inputs.property 'field25Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.FieldVisual25')}}}}
+if(project.hasProperty('exploration26Tests')){tasks.named('processGametestResources'){inputs.property 'exploration26Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Exploration26Tests')}}}}
+if(project.hasProperty('exploration26Visual')){tasks.named('processUitestResources'){inputs.property 'exploration26Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.ExplorationVisual26')}}}}
+if(project.hasProperty('fixes27Tests')){tasks.named('processGametestResources'){inputs.property 'fixes27Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Fixes27Tests')}}}}
+if(project.hasProperty('fixes27Visual')){tasks.named('processUitestResources'){inputs.property 'fixes27Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.FixesVisual27')}}}}
+
+if(project.hasProperty('bagsRoyal28Visual')){tasks.named('processUitestResources'){inputs.property 'bagsRoyal28Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.BagsRoyalVisual28')}}}}
+if(project.hasProperty('visual29Tests')){tasks.named('processGametestResources'){inputs.property 'visual29Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Visual29Tests')}}}}
+if(project.hasProperty('atmosphere29Visual')){tasks.named('processUitestResources'){inputs.property 'atmosphere29Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.AtmosphereVisual29')}}}}
+
+dependencies { modCompileOnly files('../../mods/xaeroworldmap-fabric-1.21.1-1.46.0.jar','../../work/revision30/xaerolib.jar') }
+if(project.hasProperty('landmark30Visual')) { dependencies {modRuntimeOnly files('../../mods/xaeroworldmap-fabric-1.21.1-1.46.0.jar','../../work/revision30/xaerolib.jar')} }
+if(project.hasProperty('landmark30Visual')){tasks.named('processUitestResources'){inputs.property 'landmark30Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.LandmarkVisual30')}}}}
+
+if(project.hasProperty('itemReview30Visual')){tasks.named('processUitestResources'){inputs.property 'itemReview30Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.ItemReview30Visual')}}}}
+
+if(project.hasProperty('revision31Tests')){tasks.named('processGametestResources'){inputs.property 'revision31Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Revision31Tests')}}}}
+if(project.hasProperty('starter31Tests')){tasks.named('processGametestResources'){inputs.property 'starter31Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Starter31Tests')}}}}
+if(project.hasProperty('revision32Tests')){tasks.named('processGametestResources'){inputs.property 'revision32Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Revision32Tests')}}}}
+if(project.hasProperty('revision31Visual')){
+ dependencies {modRuntimeOnly files('../../mods/xaeroworldmap-fabric-1.21.1-1.46.0.jar','../../work/revision30/xaerolib.jar')}
+ tasks.named('processUitestResources'){inputs.property 'revision31Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.Revision31Visual')}}}
+}
+if(project.hasProperty('journal32Visual')){tasks.named('processUitestResources'){inputs.property 'journal32Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.JournalAwareness32Visual')}}}}
+if(project.hasProperty('royal32Visual')){tasks.named('processUitestResources'){inputs.property 'royal32Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.Royal32Visual')}}}}
+
+if(project.hasProperty("audioPlants33Visual")){tasks.named("processUitestResources"){inputs.property "audioPlants33Visual",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.BagVisual","dev.worldprogression.test.AudioPlants33Visual")}}}}
+
+if(project.hasProperty('revision34Tests')){tasks.named('processGametestResources'){inputs.property 'revision34Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Revision32Tests", "dev.worldprogression.test.Revision34Tests')}}}}
+if(project.hasProperty('wind34Visual')){
+ dependencies { modRuntimeOnly files('../../mods/windy-1.1.1+1.21-fabric.jar','../../mods/yet_another_config_lib_v3-3.6.6+1.21.1-fabric.jar','../../mods/modmenu-11.0.5.jar') }
+ tasks.named('processUitestResources'){inputs.property 'wind34Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.BagVisual','dev.worldprogression.test.WindAudio34Visual')}}}
+ loom.runs.client{runDir '../../work/windy-review-client'}
+}
+
+if(project.hasProperty('revision35Tests')){tasks.named('processGametestResources'){inputs.property 'revision35Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Revision32Tests", "dev.worldprogression.test.Revision34Tests", "dev.worldprogression.test.Revision35Tests')}}}}
+
+if(project.hasProperty('experience35Visual')){tasks.named('processUitestResources'){inputs.property 'experience35Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.WindAudio34Visual','dev.worldprogression.test.Experience35Visual')}}};loom.runs.client{runDir '../../work/experience-review-client'}}
+
+if(project.hasProperty('stageOne37Tests')){tasks.named('processGametestResources'){inputs.property 'stageOne37Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.StageOne37Tests')}}}}
+
+if(project.hasProperty('stageOne37Visual')){
+ tasks.named('processUitestResources'){inputs.property 'stageOne37Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.StageOne37Visual')}}}
+ loom.runs.client{runDir '../../work/revision37/client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+}
+
+if(project.hasProperty('player38Visual')){
+ // Dev-only copies omit the producer Loom hint, as with the existing provider setup.
+ dependencies {runtimeOnly 'net.objecthunter:exp4j:0.4.8';modRuntimeOnly files('../../work/revision38/providers/emf-dev.jar','../../work/revision38/providers/etf-dev.jar','../../mods/modmenu-11.0.5.jar','../../work/revision38/providers/sodium-dev.jar','../../work/revision38/providers/continuity-dev.jar','../../work/revision38/providers/polytone-dev.jar')}
+ tasks.named('processUitestResources'){inputs.property 'player38Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.Player38Visual')}}}
+ loom.runs.client{runDir '../../work/revision38/client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+}
+
+if(project.hasProperty('punchy39Visual')){
+ dependencies {runtimeOnly 'net.objecthunter:exp4j:0.4.8';modRuntimeOnly files('../../work/revision38/providers/emf-dev.jar','../../work/revision38/providers/etf-dev.jar','../../mods/modmenu-11.0.5.jar','../../work/revision38/providers/sodium-dev.jar','../../work/revision38/providers/continuity-dev.jar','../../work/revision38/providers/polytone-dev.jar','../../work/revision39/punchy-dev.jar')}
+ tasks.named('processUitestResources'){inputs.property 'punchy39Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.Punchy39Visual')}}}
+ loom.runs.client{runDir '../../work/revision39/client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+}
+
+// Isolated client prototype: never included in the production main source set.
+if(project.hasProperty('arrival40Visual')){
+ dependencies {runtimeOnly 'net.objecthunter:exp4j:0.4.8';modRuntimeOnly files('../../work/revision38/providers/emf-dev.jar','../../work/revision38/providers/etf-dev.jar','../../mods/modmenu-11.0.5.jar','../../work/revision38/providers/sodium-dev.jar','../../work/revision38/providers/continuity-dev.jar','../../work/revision38/providers/polytone-dev.jar','../../work/revision39/punchy-dev.jar')}
+ tasks.named('processUitestResources'){inputs.property 'arrival40Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.preview.ArrivalPreviewClient\",\"dev.worldprogression.preview.Arrival40Capture').replace('\"environment\":\"client\"','\"mixins\":[\"arrivalpreview.mixins.json\"],\"environment\":\"client\"')}}}
+ loom.runs.client{runDir '../../work/revision40/client';programArg '--quickPlaySingleplayer';programArg 'New World';vmArg '-Dverdania.arrival.capture=true'}
+}
+
+if(project.hasProperty('arrival41Tests')){tasks.named('processGametestResources'){inputs.property 'arrival41Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Arrival41Tests')}}}}
+if(project.hasProperty('arrival41Visual')){
+ dependencies {runtimeOnly 'net.objecthunter:exp4j:0.4.8';modRuntimeOnly files('../../work/revision38/providers/emf-dev.jar','../../work/revision38/providers/etf-dev.jar','../../mods/modmenu-11.0.5.jar','../../work/revision38/providers/sodium-dev.jar','../../work/revision38/providers/continuity-dev.jar','../../work/revision38/providers/polytone-dev.jar','../../work/revision39/punchy-dev.jar')}
+ tasks.named('processUitestResources'){inputs.property 'arrival41Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.Arrival41Review')}}}
+ loom.runs.client{runDir '../../work/revision41/client';programArg '--quickPlaySingleplayer';programArg 'New World';vmArg '-Dverdania.arrival.recordAudio=true';if(project.hasProperty('arrival41GuideReview'))vmArg '-Dverdania.arrival.guideReview=true'}
+}
+
+if(project.hasProperty('arrival41Visual')){tasks.named('runClient'){environment 'PULSE_SINK','verdania_preview41';environment 'ALSOFT_DRIVERS','pulse';environment 'ALSOFT_LOGLEVEL','3';environment 'ALSOFT_LOGFILE',file('../../work/revision41/openal.log').absolutePath}}
+
+if(project.hasProperty('arrival42Visual')){
+ dependencies {runtimeOnly 'net.objecthunter:exp4j:0.4.8';modRuntimeOnly files('../../work/revision38/providers/emf-dev.jar','../../work/revision38/providers/etf-dev.jar','../../mods/modmenu-11.0.5.jar','../../work/revision38/providers/sodium-dev.jar','../../work/revision38/providers/continuity-dev.jar','../../work/revision38/providers/polytone-dev.jar','../../work/revision39/punchy-dev.jar')}
+ tasks.named('processUitestResources'){inputs.property 'arrival42Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.Arrival42Review').replace('"environment":"client"','"mixins":["arrival42test.mixins.json"],"environment":"client"')}}}
+ loom.runs.client{runDir '../../work/revision42/client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+ tasks.named('runClient'){environment 'PULSE_SINK','verdania_preview42';environment 'ALSOFT_DRIVERS','pulse'}
+}
+
+if(project.hasProperty('arrival43Visual')){
+ dependencies {runtimeOnly 'net.objecthunter:exp4j:0.4.8';modRuntimeOnly files('../../work/revision38/providers/emf-dev.jar','../../work/revision38/providers/etf-dev.jar','../../mods/modmenu-11.0.5.jar','../../work/revision38/providers/sodium-dev.jar','../../work/revision38/providers/continuity-dev.jar','../../work/revision38/providers/polytone-dev.jar','../../work/revision39/punchy-dev.jar')}
+ tasks.named('processUitestResources'){inputs.property 'arrival43Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.Arrival43Review').replace('"environment":"client"','"mixins":["arrival42test.mixins.json"],"environment":"client"')}}}
+ loom.runs.client{runDir '../../work/revision43/client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+ tasks.named('runClient'){environment 'PULSE_SINK','verdania_preview43';environment 'ALSOFT_DRIVERS','pulse'}
+}
+
+if(project.hasProperty('foundry44Tests')){tasks.named('processGametestResources'){inputs.property 'foundry44Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Foundry44Tests')}}}}
+if(project.hasProperty('foundry44Visual')){
+ dependencies {runtimeOnly 'net.objecthunter:exp4j:0.4.8';modRuntimeOnly files('../../work/revision38/providers/emf-dev.jar','../../work/revision38/providers/etf-dev.jar','../../mods/modmenu-11.0.5.jar','../../work/revision38/providers/sodium-dev.jar','../../work/revision38/providers/continuity-dev.jar','../../work/revision38/providers/polytone-dev.jar','../../work/revision39/punchy-dev.jar')}
+ tasks.named('processUitestResources'){inputs.property 'foundry44Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.MeteorUiTestClient','dev.worldprogression.test.Foundry44Review')}}}
+ loom.runs.client{runDir '../../work/revision44/client';programArg '--quickPlaySingleplayer';programArg 'New World'}
+}
+
+// The vanilla TestServer deliberately uses only dimensions in its flat preset.
+if(project.hasProperty("foundry44Tests"))sourceSets.gametest.resources.srcDir "src/gametest/foundry44"
+
+if(project.hasProperty("foundry44Visual")){tasks.named("runClient"){environment "PULSE_SINK","verdania_preview44";environment "ALSOFT_DRIVERS","pulse"}}
+
+if(project.hasProperty("foundry44Audio")){tasks.named("processUitestResources"){inputs.property "foundry44Audio",true;filesMatching("fabric.mod.json"){filter{line->line.replace("dev.worldprogression.test.Foundry44Review","dev.worldprogression.test.Foundry44AudioReview")}}}}
+
+if(project.hasProperty('foundry46Tests')){tasks.named('processGametestResources'){inputs.property 'foundry46Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Foundry46Tests')}}}}
+
+if(project.hasProperty('workshopMultiplayerTests')){tasks.named('processGametestResources'){inputs.property 'workshopMultiplayerTests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.WorkshopMultiplayerTests')}}}}
+
+if(project.hasProperty('foundry46Visual')){
+ tasks.named('processUitestResources'){inputs.property 'foundry46Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.Foundry44Review','dev.worldprogression.test.Foundry46Review')}}}
+ loom.runs.client{runDir '../../work/revision46/client'}
+ tasks.named('runClient'){environment 'PULSE_SINK','verdania_preview46';environment 'ALSOFT_DRIVERS','pulse'}
+}
+
+if(project.hasProperty('foundry49Tests')){tasks.named('processGametestResources'){inputs.property 'foundry49Tests',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.ProgressionGameTests','dev.worldprogression.test.Workshop49Tests')}}};sourceSets.gametest.resources.srcDir 'src/gametest/foundry44'}
+if(project.hasProperty('foundry49Visual')){
+ tasks.named('processUitestResources'){inputs.property 'foundry49Visual',true;filesMatching('fabric.mod.json'){filter{line->line.replace('dev.worldprogression.test.Foundry44Review','dev.worldprogression.test.Workshop49Review')}}}
+ loom.runs.client{runDir '../../work/revision49/client'}
+ tasks.named('runClient'){environment 'PULSE_SINK','verdania_preview49';environment 'ALSOFT_DRIVERS','pulse'}
+}
+
+if (project.hasProperty('caves41Tests')) {
+    tasks.named('processGametestResources') {
+        inputs.property 'caves41Tests', true
+        filesMatching('fabric.mod.json') { filter { line -> line.replace('dev.worldprogression.test.ProgressionGameTests', 'dev.worldprogression.test.Cave41Tests') } }
+    }
+}
